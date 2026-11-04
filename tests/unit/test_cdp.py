@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import random
 import threading
 
 import pytest
+
+from aevrel import cdp
 
 from aevrel.cdp import (
     CDPError,
@@ -772,3 +775,7 @@ def test_failed_shadow_publish_does_not_publish_current(tmp_path, monkeypatch) -
     with pytest.raises(CDPError, match="shadow write failure"):
         target.promote(manifest)
     assert target.current() is None
+
+
+def test_target_lock_is_defined_once() -> None:
+    assert inspect.getsource(cdp).count("class TargetLock") == 1
