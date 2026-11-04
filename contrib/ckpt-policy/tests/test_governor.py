@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -140,6 +141,38 @@ class TestResumedAndGlue(unittest.TestCase):
             g = Governor(root)
             g.step(512)
             self.assertEqual(glue(root, "step"), "512")
+
+    def test_each_step_performs_exactly_one_fsync(self):
+        steps = 5
+        with tempfile.TemporaryDirectory() as root:
+            g = Governor(root)
+            real_fsync = os.fsync
+            with patch("ckpt_policy.glue.os.fsync", wraps=real_fsync) as fsync:
+                for step in range(1, steps + 1):
+                    g.step(step)
+            self.assertEqual(fsync.call_count, steps)
+
+    def test_step_glue_cost_at_100k_steps(self):
+        """Measure the real atomic file write, including flush, fsync and rename."""
+        steps = 100_000
+        # Use tmpfs where available to measure the client/syscall glue without making the result
+        # depend on the host's backing disk. Fall back to the platform's normal temp directory.
+        benchmark_dir = "/dev/shm" if os.path.isdir("/dev/shm") else None
+        with tempfile.TemporaryDirectory(dir=benchmark_dir) as root:
+            g = Governor(root)
+            start = time.perf_counter_ns()
+            for step in range(1, steps + 1):
+                g.step(step)
+            elapsed_ns = time.perf_counter_ns() - start
+
+            micros_per_step = elapsed_ns / steps / 1_000
+            share_of_one_second_step = micros_per_step / 1_000_000 * 100
+            print(
+                f"glue: {micros_per_step:.1f}µs/step at 100k steps "
+                f"({share_of_one_second_step:.4f}% of a 1s training step)",
+                flush=True,
+            )
+            self.assertEqual(glue(root, "step"), str(steps))
 
     def test_sigterm_records_the_deadline_the_job_was_given(self):
         with tempfile.TemporaryDirectory() as root:

@@ -101,10 +101,15 @@ cluster, under two minutes from a clone.
       PATH, using the bundled engine. It is a two-arm smoke test, not the four-row model: the framework
       cadence against the policy, with the client's own per-step glue measured separately.
   **done when** the demo runs in a clean virtualenv and reports both arms.
-  **observed** at 1000 steps and a 20ms write: cadence `2 writes · 0.04s io`, policy `1 write · 0.02s
-      io`, and **`0.04s` overhead for 1000 steps** (40µs per `step()` call — one small file). That number
-      is the first honest measure of what the client costs; it is small but not zero, and it is now
-      printed rather than hidden.
+  **observed** one run of the 100k-step benchmark measured **43.2µs per `step()` call**
+      (4.32s total) on a tmpfs-backed host, including the atomic temporary file, flush, `fsync`, and
+      rename. A second run on a different host measured 15.9µs per step. These are host-specific
+      observations, not product-wide performance figures: tmpfs makes `fsync` unusually cheap, while
+      shared filesystems can make it millisecond-scale. The benchmark prints the result for the
+      environment where it runs; it is not a latency guarantee. Against a 1s training step, the first
+      measurement is **0.0043%** of step time. **Decision: keep as is.** The per-step file is the live
+      progress signal; throttling would make it stale without improving checkpoint decisions.
+      `should_save()` reads the plan directly and is not throttled or delayed.
 - [x] **1.5 The install page.** `docs/install-python.md`: install, three lines, what should appear, what
       to do when it does not.
   **done when** `make docs` passes and the page is linked from the README.
