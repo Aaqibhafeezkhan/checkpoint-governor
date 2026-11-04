@@ -60,7 +60,7 @@ contrast-image:
 # What the framework defaults cost, per scale, using their real intervals and retention. A model, not
 # a measurement: the assumptions line is printed first (decision 0028, P0.4).
 waste:
-	$(GO) run experiments/waste/main.go
+	$(GO) run experiments/waste/main.go $(if $(FRAMEWORK),-framework=$(FRAMEWORK),) $(if $(SAVE_INTERVAL),-save-interval=$(SAVE_INTERVAL),)
 
 # The three situations a user meets, asserted in one line each: the executable version of the README.
 scenarios:
