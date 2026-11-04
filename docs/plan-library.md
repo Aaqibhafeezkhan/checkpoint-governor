@@ -101,13 +101,15 @@ cluster, under two minutes from a clone.
       PATH, using the bundled engine. It is a two-arm smoke test, not the four-row model: the framework
       cadence against the policy, with the client's own per-step glue measured separately.
   **done when** the demo runs in a clean virtualenv and reports both arms.
-  **observed** the 100k-step benchmark measured **43.2µs per `step()` call** on tmpfs (4.32s
-      total), including the atomic temporary file, flush, `fsync`, and rename. Against a 1s training
-      step that is **0.0043%** of step time. The test prints `glue: <X>µs/step at 100k steps` and the
-      corresponding share; it uses tmpfs where available to avoid backing-disk variance. **Decision:
-      keep as is.** The per-step file is the live progress signal; throttling would make it stale without
-      improving checkpoint decisions. `should_save()` reads the plan directly and is not throttled or
-      delayed.
+  **observed** one run of the 100k-step benchmark measured **43.2µs per `step()` call**
+      (4.32s total) on a tmpfs-backed host, including the atomic temporary file, flush, `fsync`, and
+      rename. A second run on a different host measured 15.9µs per step. These are host-specific
+      observations, not product-wide performance figures: tmpfs makes `fsync` unusually cheap, while
+      shared filesystems can make it millisecond-scale. The benchmark prints the result for the
+      environment where it runs; it is not a latency guarantee. Against a 1s training step, the first
+      measurement is **0.0043%** of step time. **Decision: keep as is.** The per-step file is the live
+      progress signal; throttling would make it stale without improving checkpoint decisions.
+      `should_save()` reads the plan directly and is not throttled or delayed.
 - [x] **1.5 The install page.** `docs/install-python.md`: install, three lines, what should appear, what
       to do when it does not.
   **done when** `make docs` passes and the page is linked from the README.
