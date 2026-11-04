@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -140,6 +141,16 @@ class TestResumedAndGlue(unittest.TestCase):
             g = Governor(root)
             g.step(512)
             self.assertEqual(glue(root, "step"), "512")
+
+    def test_each_step_performs_exactly_one_fsync(self):
+        steps = 5
+        with tempfile.TemporaryDirectory() as root:
+            g = Governor(root)
+            real_fsync = os.fsync
+            with patch("ckpt_policy.glue.os.fsync", wraps=real_fsync) as fsync:
+                for step in range(1, steps + 1):
+                    g.step(step)
+            self.assertEqual(fsync.call_count, steps)
 
     def test_step_glue_cost_at_100k_steps(self):
         """Measure the real atomic file write, including flush, fsync and rename."""
