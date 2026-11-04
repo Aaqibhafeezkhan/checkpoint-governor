@@ -57,6 +57,18 @@ var Frameworks = []Framework{
 	},
 }
 
+// WithExplicitInterval returns a framework copy priced at a caller-supplied interval. Retention is
+// deliberately left unspecified: --save-interval sets cadence, not how many checkpoints are retained.
+func WithExplicitInterval(fw Framework, interval int) (Framework, error) {
+	if interval <= 0 {
+		return Framework{}, fmt.Errorf("waste: explicit save interval must be positive")
+	}
+	fw.IntervalSteps = func(int) int { return interval }
+	fw.Source = fmt.Sprintf("explicit --save-interval=%d", interval)
+	fw.Keeps = ""
+	return fw, nil
+}
+
 // Scale is one job: its model size, its world, and how long one step takes. The step times are
 // illustrative — they are not benchmarks of any particular GPU.
 type Scale struct {
@@ -142,6 +154,7 @@ func Run(a Assumptions, fw Framework, s Scale) (Row, error) {
 	case "all":
 		row.StorageBytes = float64(row.Writes) * bytes
 	case "":
+		// An explicit cadence does not establish a retention policy.
 		row.StorageBytes = 0
 	default:
 		// "1" keeps the newest copy (and, in Lightning, the best one, which is also one copy).

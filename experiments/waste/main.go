@@ -20,6 +20,7 @@ func main() {
 	tput := flag.Float64("throughput", 2, "aggregate write throughput in GB/s")
 	spe := flag.Int("steps-per-epoch", 1000, "steps in one epoch, for the frameworks whose default is 1 epoch")
 	fwOnly := flag.String("framework", "", "only this framework (huggingface, lightning, composer, megatron)")
+	saveInterval := flag.Int("save-interval", 0, "explicit checkpoint interval in steps (Megatron)")
 	flag.Parse()
 
 	a := waste.Assumptions{Hours: *hours, BytesPerParam: *bpp, ThroughputGBs: *tput, StepsPerEpoch: *spe}
@@ -42,6 +43,18 @@ func main() {
 			os.Exit(2)
 		}
 	}
+	if *saveInterval != 0 {
+		if *fwOnly != "megatron" {
+			fmt.Fprintln(os.Stderr, "waste: --save-interval requires --framework=megatron")
+			os.Exit(2)
+		}
+		fw, err := waste.WithExplicitInterval(frameworks[0], *saveInterval)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		frameworks[0] = fw
+	}
 
 	for _, f := range frameworks {
 		fmt.Printf("%s — %s\n", f.Name, f.Source)
@@ -58,9 +71,13 @@ func main() {
 					r.Scale, "—", "—", "—", "—", "—", "—", "—", r.Note)
 				continue
 			}
+			storage, keeps := waste.ShortBytes(r.StorageBytes), r.Keeps
+			if r.Keeps == "" {
+				storage, keeps = "—", "—"
+			}
 			fmt.Printf("  %-16s %6d %7d %8.0fs %8.1f%% %10.1f %10s %8s",
 				r.Scale, r.IntervalSteps, r.Writes, r.WriteSeconds, r.WasteFraction*100,
-				r.WasteGPUHours, waste.ShortBytes(r.StorageBytes), r.Keeps)
+				r.WasteGPUHours, storage, keeps)
 			if !r.Feasible {
 				fmt.Printf("  %s", r.Note)
 			}

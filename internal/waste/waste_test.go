@@ -2,6 +2,7 @@ package waste
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -10,7 +11,7 @@ import (
 func TestTheWasteFractionIsWriteTimeOverInterval(t *testing.T) {
 	a := Assumptions{Hours: 4, BytesPerParam: 16, ThroughputGBs: 2, StepsPerEpoch: 1000}
 	s := Scale{Name: "1B / 8 GPU", Params: 1e9, GPUs: 8, StepMS: 1000}
-	fw := Frameworks[0] // huggingface: 500 steps, keep all
+	fw := Frameworks[0]
 
 	r, err := Run(a, fw, s)
 	if err != nil {
@@ -28,7 +29,6 @@ func TestTheWasteFractionIsWriteTimeOverInterval(t *testing.T) {
 	if want := 0.016 * 8 * 4; math.Abs(r.WasteGPUHours-want) > 1e-9 {
 		t.Fatalf("waste gpu-hours = %v, want %v", r.WasteGPUHours, want)
 	}
-	// 4h at 1s/step is 14,400 steps; 14,400/500 is 28 writes, and keeping all of them is 28 × 16 GB.
 	if r.Writes != 28 {
 		t.Fatalf("writes = %d, want 28", r.Writes)
 	}
@@ -37,11 +37,9 @@ func TestTheWasteFractionIsWriteTimeOverInterval(t *testing.T) {
 	}
 }
 
-// A write that takes longer than the interval is not a slow default, it is an infeasible one: the
-// framework never stops writing. The row has to say so instead of printing a fraction above 100%.
 func TestAWriteLongerThanTheIntervalIsInfeasible(t *testing.T) {
 	a := Assumptions{Hours: 4, BytesPerParam: 16, ThroughputGBs: 2, StepsPerEpoch: 1000}
-	s := Scale{Name: "huge", Params: 1e12, GPUs: 512, StepMS: 1000} // 16 TB at 2 GB/s is 8,000s
+	s := Scale{Name: "huge", Params: 1e12, GPUs: 512, StepMS: 1000}
 	r, err := Run(a, Frameworks[0], s)
 	if err != nil {
 		t.Fatal(err)
@@ -54,19 +52,11 @@ func TestAWriteLongerThanTheIntervalIsInfeasible(t *testing.T) {
 	}
 }
 
-// Lightning and Composer default to one epoch, so the interval is the caller's steps-per-epoch; the
-// retention is different, and the table must not pretend they are the same framework.
 func TestPerEpochDefaultsUseTheGivenEpoch(t *testing.T) {
 	a := Assumptions{Hours: 4, BytesPerParam: 16, ThroughputGBs: 2, StepsPerEpoch: 1000}
 	s := Scale{Name: "1B / 8 GPU", Params: 1e9, GPUs: 8, StepMS: 1000}
 	for _, name := range []string{"lightning", "composer"} {
-		var fw Framework
-		for _, f := range Frameworks {
-			if f.Name == name {
-				fw = f
-			}
-		}
-		r, err := Run(a, fw, s)
+		r, err := Run(a, find(t, name), s)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -74,7 +64,6 @@ func TestPerEpochDefaultsUseTheGivenEpoch(t *testing.T) {
 			t.Fatalf("%s interval = %d, want one epoch (1000)", name, r.IntervalSteps)
 		}
 	}
-	// Lightning keeps 1 copy, Composer keeps all: 8 GB for one copy against 14 × 16 GB.
 	l, _ := Run(a, find(t, "lightning"), s)
 	c, _ := Run(a, find(t, "composer"), s)
 	if l.StorageBytes != 16e9 {
@@ -85,7 +74,6 @@ func TestPerEpochDefaultsUseTheGivenEpoch(t *testing.T) {
 	}
 }
 
-// Megatron has no default. A row that invented one would be a rumour, so it carries the note instead.
 func TestMegatronHasNoDefault(t *testing.T) {
 	a := Assumptions{Hours: 4, BytesPerParam: 16, ThroughputGBs: 2, StepsPerEpoch: 1000}
 	r, err := Run(a, find(t, "megatron"), Scale{Name: "7B / 64 GPU", Params: 7e9, GPUs: 64, StepMS: 2000})
@@ -100,7 +88,41 @@ func TestMegatronHasNoDefault(t *testing.T) {
 	}
 }
 
-// Every framework carries the source of its number; that is what makes the table checkable.
+func TestMegatronExplicitIntervalPricesEveryScale(t *testing.T) {
+	fw, err := WithExplicitInterval(find(t, "megatron"), 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fw.IntervalSteps(0) != 1000 {
+		t.Fatalf("interval = %d, want 1000", fw.IntervalSteps(0))
+	}
+	if fw.Source != "explicit --save-interval=1000" {
+		t.Fatalf("source = %q", fw.Source)
+	}
+	if fw.Keeps != "" {
+		t.Fatalf("explicit interval must not invent retention, got %q", fw.Keeps)
+	}
+	a := Assumptions{Hours: 4, BytesPerParam: 16, ThroughputGBs: 2, StepsPerEpoch: 1000}
+	for _, scale := range Scales {
+		r, err := Run(a, fw, scale)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.IntervalSteps != 1000 || r.WasteFraction <= 0 || !strings.Contains(r.Source, "--save-interval=1000") {
+			t.Fatalf("unexpected explicit Megatron row for %s: %+v", scale.Name, r)
+		}
+		if r.Keeps != "" {
+			t.Fatalf("retention should remain unspecified for %s", scale.Name)
+		}
+	}
+}
+
+func TestExplicitIntervalMustBePositive(t *testing.T) {
+	if _, err := WithExplicitInterval(find(t, "megatron"), 0); err == nil {
+		t.Fatal("expected non-positive interval to be rejected")
+	}
+}
+
 func TestEveryFrameworkNamesItsSource(t *testing.T) {
 	for _, f := range Frameworks {
 		if f.Source == "" {
