@@ -19,12 +19,14 @@ import (
 
 	"github.com/bolubo/checkpoint-governor/internal/advise"
 	"github.com/bolubo/checkpoint-governor/internal/exec"
+	"github.com/bolubo/checkpoint-governor/internal/layout"
 	"github.com/bolubo/checkpoint-governor/internal/lease"
 	"github.com/bolubo/checkpoint-governor/internal/notify"
 	"github.com/bolubo/checkpoint-governor/internal/observe"
 	"github.com/bolubo/checkpoint-governor/internal/permit"
 	"github.com/bolubo/checkpoint-governor/internal/policy"
 	"github.com/bolubo/checkpoint-governor/internal/produce"
+	"github.com/bolubo/checkpoint-governor/internal/resume"
 )
 
 // Config is one governed directory.
@@ -483,6 +485,11 @@ func (c Config) leaseTTL() time.Duration {
 func retainedCopies(copies []policy.Copy, keepCopies int) int {
 	complete := 0
 	for _, c := range copies {
+		// Retention counts our own copies. A framework's checkpoint stays on disk whatever our
+		// decision says, and counting it would make the receipt promise fewer copies than exist.
+		if c.Kind != "" && c.Kind != layout.KindGen {
+			continue
+		}
 		if c.State == policy.CopySealed || c.State == policy.CopyVerified {
 			complete++
 		}
@@ -674,6 +681,7 @@ func (l *Loop) Reconcile() (Step, error) {
 	// What the job declared about itself is read once per round: its size, its own save duration and
 	// any announced deadline. Numbers, not conditions.
 	l.glue = readGlue(l.cfg.Dir)
+	l.noteMembership()
 
 	// A new boot id means the job restarted; decisions from the previous incarnation are stale. The
 	// membership registry may also have counted a generation, and a boot id is by itself a new
@@ -703,7 +711,7 @@ func (l *Loop) Reconcile() (Step, error) {
 		Now:               now,
 		UnitID:            l.cfg.UnitID,
 		Generation:        l.ledger.Generation,
-		Step:              readInt(filepath.Join(base, "step")),
+		Step:              stepOfGlue(l.glue, filepath.Join(base, "step")),
 		Progress:          readFloat(filepath.Join(base, "progress")),
 		Seen:              l.ledger.Seen(),
 		WriteCostSamples:  l.ledger.WriteCosts,
@@ -963,6 +971,10 @@ func (l *Loop) Reconcile() (Step, error) {
 	if l.cfg.Reclaim != nil {
 		reclaimCause, reclaimHeld = l.cfg.Reclaim(now)
 	}
+	// Can the newest copy continue the run? "Incomplete" is a finer kind of broken (0026): the bytes
+	// are whole and the work cannot resume. The answer is read once per step and cached in the ledger,
+	// because a view must not probe the disk and a round must not read the same declaration twice.
+	l.noteCompleteness(&s)
 	windowDue := l.window.Due(now)
 	decide := l.shouldDecide(now, s) || windowDue ||
 		(reclaimHeld && l.ledger.CauseWrittenID != reclaimCause)
@@ -970,6 +982,11 @@ func (l *Loop) Reconcile() (Step, error) {
 	if decide {
 		d = l.cfg.Policy.Decide(l.cfg.Bounds, s)
 		ov.Decisions = 1
+		// Remember when we asked for a repair of an incomplete copy. A newer copy that is still
+		// incomplete is the difference between "try once" and "stop asking".
+		if d.Action == policy.ActionRepair && incompleteNewest(s.Copies) && l.ledger.Status.IncompleteAskedAt == 0 {
+			l.ledger.Status.IncompleteAskedAt = newestStep(s.Copies)
+		}
 		l.ledger.DecidedSealStep = l.ledger.LastSealStep
 		l.ledger.DecidedFailures = l.ledger.Failures
 		l.ledger.WasInFlight = s.SaveInFlight
@@ -1791,26 +1808,18 @@ type Receipt struct {
 	OnDisk int
 }
 
-// countSealed counts the directories that carry a manifest. It walks the same shape verify.py does,
-// one level deep, because a receipt is not the place to load a checkpoint.
+// countSealed counts what a restore could read, whoever wrote it. It asks the same finder `resumable`
+// and `status` ask, so a receipt and a status cannot print two different numbers (0026).
 func countSealed(dir string) int {
-	entries, err := os.ReadDir(dir)
+	cfg, _, err := layout.LoadConfig(dir)
 	if err != nil {
 		return 0
 	}
-	n := 0
-	for _, e := range entries {
-		// Both layouts, because the contract's writer (0025) names its directories by generation. Counting
-		// only `step-` made every checkpoint written under the contract invisible here, and the receipt
-		// then said "no writes" immediately after a write (F11).
-		if !e.IsDir() || !(strings.HasPrefix(e.Name(), "step-") || strings.HasPrefix(e.Name(), "gen-")) {
-			continue
-		}
-		if fileExists(filepath.Join(dir, e.Name(), "manifest.json")) {
-			n++
-		}
+	res, err := layout.Scan(dir, cfg)
+	if err != nil {
+		return 0
 	}
-	return n
+	return res.Count
 }
 
 // Receipt reads the counters the loop already keeps; it recomputes nothing, because a receipt that
@@ -1937,4 +1946,107 @@ func plural(n int, word string) string {
 		return "1 " + word
 	}
 	return fmt.Sprintf("%d %ss", n, word)
+}
+
+// noteCompleteness fills the snapshot's Missing from the newest sealed copy's declaration, and decides
+// whether a repair has already been answered by a newer copy that is still incomplete.
+//
+// The answer is cached by step in the ledger: reading a declaration once per round is cheap, but a view
+// must not read the disk at all, so both the view and the decision take the same cached fact (0026).
+func (l *Loop) noteCompleteness(s *policy.Snapshot) {
+	cfg, _, cfgErr := layout.LoadConfig(l.cfg.Dir)
+	if cfgErr != nil {
+		// A bad layout.json is reported where it is used (`resumable`, `status`). Here the previous
+		// answer stands rather than being replaced by a guess.
+		return
+	}
+	res, err := layout.Scan(l.cfg.Dir, cfg)
+	if err != nil {
+		return
+	}
+	if !res.Found {
+		// Nothing sealed: there is nothing to judge, and the next incomplete copy is a first attempt.
+		l.ledger.Status.IncompleteAskedAt = 0
+		return
+	}
+	// The cache key is the copy itself, not only its step: a framework checkpoint and one of ours can
+	// share a step, and they are judged by different declarations (0026).
+	if l.ledger.Status.ResumeKind != res.Newest.Kind || l.ledger.Status.ResumeStep != res.Newest.Step {
+		v := res.Verdict(cfg, resume.World{})
+		l.ledger.Status.ResumeKind = res.Newest.Kind
+		l.ledger.Status.ResumeStep = res.Newest.Step
+		l.ledger.Status.ResumeMissing = v.Missing
+	}
+	attachMissing(s, res.Newest.Kind, res.Newest.Step, l.ledger.Status.ResumeMissing)
+	if !incompleteNewest(s.Copies) {
+		// Nothing is missing any more: the next incomplete copy is a first attempt again.
+		l.ledger.Status.IncompleteAskedAt = 0
+		return
+	}
+	if asked := l.ledger.Status.IncompleteAskedAt; asked > 0 && newestStep(s.Copies) > asked {
+		// We asked once, a newer copy arrived, and the same state is still absent: the writer is
+		// never going to produce it. Rewriting again would be a storm, not a repair.
+		s.IncompleteRepairs = 1
+	}
+}
+
+// attachMissing puts the verdict's missing states on the copy it is about. A framework copy is not in
+// the observer's list — the observer reads our own layout — so it is appended: without it the policy
+// would see no newest copy and the missing state would never reach a decision.
+func attachMissing(s *policy.Snapshot, kind string, step int64, missing []string) {
+	for i := range s.Copies {
+		c := &s.Copies[i]
+		if c.Step == step && (c.Kind == kind || (kind == layout.KindGen && c.Kind == "")) {
+			c.Kind = kind
+			c.Missing = missing
+			return
+		}
+	}
+	if kind == layout.KindGen {
+		return
+	}
+	s.Copies = append(s.Copies, policy.Copy{
+		Step: step, Kind: kind, State: policy.CopySealed, Missing: missing,
+	})
+}
+
+// missingStates is which required states the newest copy's declaration does not hold. Empty when
+// nothing is sealed, when there is no declaration (nobody said, so nothing is missing), or when the
+// copy holds everything the job asked for.
+func missingStates(dir string) []string {
+	cfg, _, err := layout.LoadConfig(dir)
+	if err != nil {
+		return nil
+	}
+	res, err := layout.Scan(dir, cfg)
+	if err != nil || !res.Found {
+		return nil
+	}
+	return res.Verdict(cfg, resume.World{}).Missing
+}
+
+func incompleteNewest(copies []policy.Copy) bool {
+	c := newestSealed(copies)
+	return c != nil && len(c.Missing) > 0
+}
+
+func newestSealed(copies []policy.Copy) *policy.Copy {
+	var newest *policy.Copy
+	for i := range copies {
+		c := &copies[i]
+		if c.State != policy.CopySealed && c.State != policy.CopyVerified {
+			continue
+		}
+		if newest == nil || c.Step > newest.Step {
+			newest = c
+		}
+	}
+	return newest
+}
+
+func newestStep(copies []policy.Copy) int64 {
+	if c := newestSealed(copies); c != nil {
+		return c.Step
+	}
+	return 0
 }

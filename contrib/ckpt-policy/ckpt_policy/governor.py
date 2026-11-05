@@ -21,6 +21,14 @@ from .manifest import build_manifest, write_manifest, write_resume
 PLAN_SCHEMA = 2
 ENGINE_ENV = "CKPTCTL_ENGINE"
 
+# What a framework checkpoint can carry. Frameworks do not save a data-loader position — they re-iterate
+# the dataset and skip — so a declaration that demanded one would refuse every copy they ever write.
+FRAMEWORK_REQUIRES = ("model", "optimizer", "scheduler", "rng")
+
+# Each rank's own progress lives here. It is not `members/`: that name is already the launcher's
+# roster file, and a file and a directory cannot share it. Single-writer jobs never create this.
+RANKS_DIR = "ranks"
+
 
 def engine_path() -> str | None:
     """The engine this client should use: the bundled one first, then `CKPTCTL_ENGINE`, then PATH.
@@ -66,7 +74,8 @@ class Saves:
 
 class Governor:
     def __init__(self, root: str, *, format: str = "dcp", world: World | None = None,
-                 saves: Saves | None = None, rank0: bool = True, members: int | None = None,
+                 saves: Saves | None = None, rank0: bool = True, rank: int = 0,
+                 members: int | None = None,
                  expected_bytes: int | None = None, writer: str = "ckpt-policy",
                  step_baseline_ms: int = 0, start_engine: bool = False,
                  engine: str | None = None, engine_every: str = "1s",
@@ -76,7 +85,10 @@ class Governor:
         self.world = world or World()
         self.saves = saves or Saves()
         self.writer = writer
-        self.rank0 = rank0
+        # `rank` is this process's own number; `rank0=False` with no rank means "not the leader".
+        # The leader owns every team-level file; a non-leader owns only `members/<rank>/`.
+        self.rank = int(rank) if rank0 else int(rank or 1)
+        self.rank0 = self.rank == 0
         self._served: set[int] = set()
         # A request is identified by its `requestId` (decision 0017), because a plan for a first
         # checkpoint carries generation 0: there is no copy yet to number.
@@ -184,15 +196,31 @@ class Governor:
 
     # -- the loop -----------------------------------------------------------------------------
 
-    def step(self, n: int) -> None:
-        """Say where the run is. One call per step; it is the whole of the write side."""
+    def _lead_only(self, name: str) -> None:
+        """Refuse a team-level write from a rank that does not own it.
+
+        Silently ignoring it would let eight ranks overwrite one `step` and the controller would see
+        whichever wrote last — possibly the one that is behind. An error names the file and the rank.
+        """
         if not self.rank0:
-            return
+            raise RuntimeError(
+                f"lead-only file: {name} belongs to rank 0; this process is rank {self.rank}")
+
+    def step(self, n: int) -> None:
+        """Say where this rank is. One call per step; it is the whole of the write side.
+
+        Every rank owns its own cell, including the leader: the controller compares members, and a
+        leader that only wrote the team-level file would look like the only member. The team-level
+        `step` stays for the single-writer path and every existing reader.
+        """
+        write_text(self.root, os.path.join(RANKS_DIR, str(self.rank), "step"), str(int(n)))
+        if self.rank0:
+            write_text(self.root, "step", str(int(n)))
         now = time.monotonic()
-        write_text(self.root, "step", str(int(n)))
         if self._stopping_at is not None:
             left = max(0, int(self._grace_seconds - (now - self._stopping_at)))
-            write_text(self.root, "seconds-left", str(left))
+            if self.rank0:
+                write_text(self.root, "seconds-left", str(left))
         self._last_step = now
 
     def requested(self) -> int:
@@ -247,11 +275,46 @@ class Governor:
         self._last_write = time.monotonic()
         return manifest
 
+    def declare(self, path: str, *, step: int, state: dict | None = None,
+                format: str = "other", requires: list[str] | None = None,
+                target: str | None = None, caveats: list[str] | None = None) -> None:
+        """Say what a framework-written checkpoint holds, beside that checkpoint.
+
+        The framework owns the layout and the bytes; we own the statement a restore is judged
+        against, because nobody else writes one. `state` defaults to this client's configured
+        `Saves`, which is what the framework was asked to write.
+
+        `path` is either a directory (Hugging Face's `checkpoint-<step>/`) or the artifact itself
+        (Lightning's `*.ckpt`). A directory gets `<dir>/resume.json` with `target: "."`; an artifact
+        gets `<artifact>.resume.json` with `target: <file name>`. Those are the only two places a
+        declaration may live.
+
+        `requires` defaults to the four states a framework checkpoint can actually carry: model,
+        optimizer, scheduler and rng. Frameworks re-iterate the loader instead of saving a data
+        position, so judging them against a dataloader they never had would refuse every copy.
+        """
+        self._lead_only("resume.json")
+        is_dir = os.path.isdir(path)
+        target = "." if target is None and is_dir else target
+        if target is None:
+            target = os.path.basename(path)
+        if target == ".":
+            out_dir, file_name = path, "resume.json"
+        else:
+            out_dir, file_name = os.path.dirname(path) or ".", target + ".resume.json"
+            if is_dir:
+                out_dir = path
+        os.makedirs(out_dir, exist_ok=True)
+        write_resume(out_dir, generation=int(step), step=int(step), format=format,
+                     world=self.world.as_dict(),
+                     state=state or self.saves.as_dict(),
+                     requires=requires if requires is not None else list(FRAMEWORK_REQUIRES),
+                     target=target, caveats=caveats, loader=None, file_name=file_name)
+
     def resumed(self, generation: int, step: int, seconds: float | None = None) -> None:
         """Say what the loader adopted, right after it returns. This is what makes a restart
         distinguishable from a resume from outside (decision 0026)."""
-        if not self.rank0:
-            return
+        self._lead_only("resumed-generation")
         write_text(self.root, "resumed-generation", str(int(generation)))
         write_text(self.root, "resumed-step", str(int(step)))
         if seconds is not None:
@@ -259,8 +322,8 @@ class Governor:
 
     def ending(self) -> None:
         """Training is over: the work that exists now is the work that matters."""
-        if self.rank0:
-            write_text(self.root, "ending", "1")
+        self._lead_only("ending")
+        write_text(self.root, "ending", "1")
 
     def may_exit(self) -> bool:
         """The controller's answer to the final write. A job that releases itself has no protocol."""
@@ -268,8 +331,7 @@ class Governor:
 
     def on_sigterm(self, grace_seconds: int = 30) -> None:
         """Record the deadline the platform gave us. The job owns it; we never invent a second one."""
-        if not self.rank0:
-            return
+        self._lead_only("stopping")
         self._grace_seconds = int(grace_seconds)
         self._stopping_at = time.monotonic()
         write_text(self.root, "stopping", "1")
