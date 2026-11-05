@@ -1,14 +1,19 @@
 # Install for Python
 
-Status: published as `ckpt-policy 0.23.0`, `manylinux_2_17_x86_64` — the same number as the release tag
+Status: published as `ckpt-policy 0.25.0`, `manylinux_2_17_x86_64` — the same number as the release tag
 (decision 0029), uploaded by `.github/workflows/publish-pypi.yml` through trusted publishing. `make
 wheel` builds the same wheel from a checkout.
 
 ## 1. Install
 
 ```bash
+python3 -m venv .venv
+. .venv/bin/activate
 pip install ckpt-policy
 ```
+
+The first two lines are not optional on a machine whose system Python is managed by PEP 668: pip there
+refuses to install (`error: externally-managed-environment`), and a venv is the supported way in.
 
 No other install step: no `go install`, no PATH entry, no second download.
 
@@ -16,9 +21,9 @@ From a checkout, the same wheel:
 
 ```bash
 make wheel
-# engine: linux/amd64 (v0.23.0)
-# ckptctl v0.23.0
-# wheel: ckpt_policy-0.23.0-py3-none-manylinux_2_17_x86_64.whl, engine inside
+# engine: linux/amd64 (v0.25.0)
+# ckptctl v0.25.0
+# wheel: ckpt_policy-0.25.0-py3-none-manylinux_2_17_x86_64.whl, engine inside
 python3 -m pip install dist/wheels/ckpt_policy-*.whl
 ```
 
@@ -67,8 +72,8 @@ framework default (save every 500 steps)         2    0.04s      0.00s
 ckpt-policy, unconfigured                        1    0.02s      0.04s
 ```
 
-The second column is the point; the third is what the client itself costs (one small file per step), and
-it is printed rather than hidden.
+The second column is the point; the third is what the client itself costs (one small file per rank per
+step — the leader also writes the team-level cell), and it is printed rather than hidden.
 
 ## What you should see
 

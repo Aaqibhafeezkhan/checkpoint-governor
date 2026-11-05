@@ -3,6 +3,90 @@
 One entry per released tag. The prototype's history before this file is `git log`; this file starts at
 the first release that makes a compatibility promise.
 
+## v0.25.0 — 2026-11-05
+
+The release where the install is copyable, the framework runs are real, and the declaration says what
+it needs.
+
+**A fresh machine can follow the page.** `docs/install-python.md` and all three integration pages
+start with `python3 -m venv .venv`, because a system Python managed by PEP 668 refuses `pip install`
+— measured on this machine, not assumed. Each integration page opens with one `Paste this` block whose
+first import is identical everywhere.
+
+**Disk is priced before the first write.** `ckptctl init --params=7B` estimates 18 bytes per
+parameter (fp16 weights, two Adam moments, gradient and master weights) and prints a `disk:` line
+for every answer. The number always says `estimated … not measured`, and the help says it is about
+disk, not whether this GPU can train the model.
+
+**The declaration says what it needs, and the wrapper stops retyping it.** `ckptctl declare` gained
+`--world`, `--tp`, `--pp`, `--dp` and `--reshardable`, so a multi-rank copy is judged against the
+world it was written under. `ckptctl wrap` reads `deployment.json`'s `grace_seconds` when `--grace` is
+absent and prints where the number came from. `ckptctl status` names the `ext` keys a reader ignored
+(names only, never values).
+
+**A receipt says where the copy lives.** `durability      local disk: a copy outlives the process,
+not the volume` is printed whether or not the run wrote anything.
+
+**Real Lightning and Composer runs found real defects, and they are fixed.** Both callbacks were
+plain objects: Lightning failed at `setup`, Composer at `run_event`. Both drove public save
+functions that write a file but skip the framework's own bookkeeping — a real run left
+`best_model_path` empty. They now subclass the framework callback and drive the framework's own
+routines (`_save_topk_checkpoint`/`_save_last_checkpoint`, `CheckpointSaver._save_checkpoint` and
+`_rotate_checkpoints`). A framework write leaves no `gen-*`, so requests are now deduped by
+`requestId`; dedupe by generation used to silence every window request after the first one.
+
+**Version skew with real binaries.** `hack/skew.sh` checks out the ref that shipped the 0.24 reader,
+builds it, and lets it refuse `min_reader: 0.25` on its own terms; this build accepts the same file.
+
+**Tests.** Thirty-three outbound promises name the test that would fail if they stopped being true
+(`make test-claims` prints `claims: 33 · tests found: 33 · missing: 0`).
+
+**Not in this release.** Physical-disk low-space, the 1-second grace matrix, a two-node kind
+cluster, real-model resume (T-6), and long soak runs — the testing round owns those.
+
+The Python package carries the same number without the `v`: `ckpt-policy 0.25.0`.
+
+## v0.24.0 — 2026-11-04
+
+The release where "can this continue" is answered for the layout your framework already writes.
+
+**The finder reads more than `gen-*`.** One package (`internal/layout`) recognises `gen-N/`,
+`step-N/`, Hugging Face's `checkpoint-N/`, Lightning's `*.ckpt`, a Composer episode, and whatever a
+user's `.ckpt-governor/layout.json` names. Preference is fixed (our generation first, then the highest
+step; at the same step `checkpoint-*` > `*.ckpt` > Composer), and a half-written directory is reported
+as `unknown: … is not sealed` instead of being counted as the newest copy. `resumable`, `status`, the
+receipt and the loop all ask the same finder; the receipt and `status` can no longer print two
+different numbers.
+
+**Declarations say what the job needs.** `resume.json` gained optional `requires` (default five; a
+framework declares four, because it re-iterates the dataset instead of saving a data position),
+`target` (`"."` or a sibling artifact), `caveats` (`data-position-not-saved`), `min_reader`, and `ext`.
+An older declaration keeps its exact sentence; a newer one is refused with the upgrade named.
+
+**Every adapter declares.** Hugging Face writes `checkpoint-<step>/resume.json`, Lightning writes
+`<file>.ckpt.resume.json`, Composer's rank 0 writes `<artifact>.resume.json`. `ckptctl declare` is the
+manual half, and a `probe_cmd` is the last glue (5 s, then `unknown: probe_cmd failed`).
+
+**`ckptctl wrap` makes the stop handshake executable.** It takes the first signal, writes `stopping`,
+waits for a sealed copy or the deadline, then forwards SIGTERM to the process group. Every branch
+prints, including `final write NOT made`. Proven at grace 60/30/10, N=3; a second signal forwards at
+once and records `release-forced`.
+
+**Multi-rank ownership.** Each rank owns `ranks/<rank>/step`; only rank 0 writes team-level files
+(`lead-only file` otherwise). Progress is the slowest rank, `status` prints `members 2/2 · spread 4`,
+silent ranks are named, and a missing rank shard is `not resumable: rank N shard missing`. Retention
+only removes our own layouts.
+
+**Tests.** Thirty outbound promises now name the test that would fail if they stopped being true
+(`make test-claims` prints `claims: 30 · tests found: 30 · missing: 0`). New failure injections: a
+half-written directory, a copy with no declaration, a declaration from a newer build, a probe that
+never answers. `hack/wrap-grace.sh` and `hack/members.sh` are real-process proofs.
+
+**Not in this release.** Built-in format sniffing (`probe_cmd` instead), cross-node coordination in
+`wrap`, rank barriers, real Lightning/Composer runs (v0.25), macOS/Windows wheels (v1).
+
+The Python package carries the same number without the `v`: `ckpt-policy 0.24.0`.
+
 ## v0.23.0 — 2026-11-04
 
 The release where a hold covers the nodes a multi-pod arrival actually needs.

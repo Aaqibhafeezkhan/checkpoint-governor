@@ -42,7 +42,7 @@ const (
 // ReaderVersion is what this build can judge. A writer may set `min_reader` to the version its
 // declaration needs; a newer declaration read by an older build is refused with the upgrade named,
 // rather than misread as an older one (decision 0026, version skew).
-const ReaderVersion = "0.24"
+const ReaderVersion = "0.25"
 
 // Formats are the layouts a declaration may name. The list is closed for the same reason the condition
 // catalogue is: a typo must be refused at read time, not silently treated as "some other format".
@@ -354,6 +354,41 @@ func parseVersion(s string) (version, bool) {
 		return version{}, false
 	}
 	return version{major, minor}, true
+}
+
+// ExtKeys is the extension point made visible without being trusted: sorted key names, at most eight,
+// each cut to 64 bytes and stripped of anything that would move a cursor. Values never leave the file.
+func (f File) ExtKeys() []string {
+	if len(f.Ext) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(f.Ext))
+	for name := range f.Ext {
+		names = append(names, saneKey(name))
+	}
+	sort.Strings(names)
+	if len(names) > 8 {
+		names = names[:8]
+	}
+	return names
+}
+
+// saneKey keeps a key to printable ASCII of bounded length: a declaration is untrusted, and a key with
+// a newline or an escape would rewrite the status line around it.
+func saneKey(name string) string {
+	var b strings.Builder
+	for _, r := range name {
+		if r < 0x20 || r > 0x7e {
+			b.WriteByte('?')
+			continue
+		}
+		b.WriteRune(r)
+	}
+	out := b.String()
+	if len(out) > 64 {
+		out = out[:63] + "…"
+	}
+	return out
 }
 
 // holds reports whether the declaration says this state was saved.
