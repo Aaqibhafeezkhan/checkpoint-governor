@@ -47,3 +47,10 @@ A verified seal needs every shard | docs/gate.md §When the victim is a multi-po
 A two-pod workload produces one hold | docs/gate.md §When the victim is a multi-pod workload | TestATwoPodWorkloadProducesOneHold
 A multi-pod workload needs one shared root | docs/gate.md §When the victim is a multi-pod workload | TestAPerNodeVolumeIsRefused
 A timeout is uncovered | docs/gate.md §What it does not promise | TestATimeoutMarksTheHoldUncovered
+The demo's missing shard is not resumable | docs/demo.md §The four faults | TestDemoKillThenRepair
+Evidence agrees with the command it assembles | docs/evidence-schema.md §One answer, checked | TestEvidenceJSONAgreesWithResumable
+Problem codes are a closed set | docs/evidence-schema.md §Problem codes | TestCollectAMissingShard
+doctor prints one JSON object | docs/evidence-schema.md §The bundle | TestDoctorJSONCarriesStorageAndProbes
+MCP is read-only and bounded | docs/agents.md §Safety | TestMCPRefusesPathsOutsideRoot
+An agent can name the missing rank | docs/agents.md §Two questions it can answer | TestMCPResumableNamesTheMissingRank
+Agent setup backs up and is idempotent | docs/agents.md §Ask your agent | TestSetupAgentClaudeApplyIsIdempotentAndBacksUp

@@ -8,6 +8,7 @@ One page per question. Start where your question is. Every local link here resol
 | page | question |
 |---|---|
 | [install.md](install.md) | how do I get the binaries, the image, or the Python package? |
+| [demo.md](demo.md) | thirty seconds, no cluster: the four faults and the answers they get |
 | [install-python.md](install-python.md) | `pip install`, three lines in a loop, and what to do when it fails |
 | [first-ten-minutes.md](first-ten-minutes.md) | one real run: the commands, the lines they print, and where the files are |
 | [compatibility.md](compatibility.md) | what does a version promise to keep? |
@@ -31,6 +32,7 @@ One page per question. Start where your question is. Every local link here resol
 | [conditions.md](conditions.md) | the condition names, one card each, and who produces them |
 | [verify-and-demand.md](verify-and-demand.md) | what happens after a write lands? |
 | [resume-contract.md](resume-contract.md) | what does "this can continue" mean, for any writer's layout, and what proves it? |
+| [evidence-schema.md](evidence-schema.md) | one versioned bundle: status, resume, verify, attempts, storage |
 | [glue.md](glue.md) | what the job writes into the directory, and what reads it |
 | [decisions/README.md](decisions/README.md) | why is it this way? every record that is still load-bearing |
 
@@ -52,6 +54,7 @@ One page per question. Start where your question is. Every local link here resol
 | [ci.md](ci.md) | what runs on a push, and why that and nothing more? |
 | [operator-notes.md](operator-notes.md) | what must the platform allow: the grace a checkpoint needs |
 | [storage.md](storage.md) | what does this volume promise: `local`, `shared-safe`, `shared-unsafe`, and how to measure it |
+| [agents.md](agents.md) | how does an agent ask what the CLI already knows, read-only and bounded |
 | [contrast.md](contrast.md) | what does the four-policy comparison actually say, and how do I reproduce it? |
 | [gate.md](gate.md) | how do I give a higher-priority arrival lead time on a cluster? |
 
@@ -63,13 +66,14 @@ One page per question. Start where your question is. Every local link here resol
 
 ## If you are following the work
 
-The current number is **`v0.27.0`** (decision 0029). `v0.26.0`, `v0.25.0`, `v0.24.0`, `v0.23.0`, `v0.22.0`,
-`v0.21.0`, `v0.15.0` and `v0.2.0` are earlier numbers; the release pages are history, and the two
+The current number is **`v0.28.0`** (decision 0029). `v0.27.0`, `v0.26.0`, `v0.25.0`, `v0.24.0`, `v0.23.0`,
+`v0.22.0`, `v0.21.0`, `v0.15.0` and `v0.2.0` are earlier numbers; the release pages are history, and the two
 oldest are entries in `CHANGELOG.md`, not install instructions.
 
 | page | question |
 |---|---|
-| [release-0.27.md](release-0.27.md) | **the current release**: what the volume promises, and what a workload-level hold waits for |
+| [release-0.28.md](release-0.28.md) | **the current release**: a thirty-second demo, one evidence bundle, and an agent entry |
+| [release-0.27.md](release-0.27.md) | history: what the volume promises, and what a workload-level hold waits for |
 | [release-0.26.md](release-0.26.md) | history: the command, the check, and the glue |
 | [release-0.25.md](release-0.25.md) | history: installed, run for real, said exactly |
 | [release-0.24.md](release-0.24.md) | history: the copy can be judged, whoever wrote it |
