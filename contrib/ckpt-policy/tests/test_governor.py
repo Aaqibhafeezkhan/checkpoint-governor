@@ -18,6 +18,30 @@ from ckpt_policy.glue import BASE_DIR, write_text  # noqa: E402
 from ckpt_policy.governor import engine_path  # noqa: E402
 
 
+class TestDemoJson(unittest.TestCase):
+    def test_json_output_contains_both_rows_and_required_fields(self):
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from types import SimpleNamespace
+        from ckpt_policy import demo
+
+        rows = [
+            SimpleNamespace(policy="framework default", writes=2, io=0.2, overhead=0.0),
+            SimpleNamespace(policy="ckpt-policy, unconfigured", writes=1, io=0.1, overhead=0.03),
+        ]
+        output = StringIO()
+        with patch.object(demo, "engine_path", return_value="/engine"), \
+                patch.object(demo, "run", return_value=rows), \
+                redirect_stdout(output):
+            self.assertEqual(demo.main(["--json"]), 0)
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(len(result), 2)
+        self.assertEqual([set(row) for row in result],
+                         [{"policy", "writes", "io", "overhead"}] * 2)
+        self.assertEqual([row["writes"] for row in result], [2, 1])
+
+
 def plan(root, **fields):
     """Write a plan the way the controller does, so the adapter reads the real shape."""
     doc = {"schema": 2, "epoch": 1, "expiresAt": int(time.time()) + 30, "unitId": "job-1",
