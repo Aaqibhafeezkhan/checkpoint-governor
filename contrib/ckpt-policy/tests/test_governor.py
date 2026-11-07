@@ -26,8 +26,9 @@ class TestDemoJson(unittest.TestCase):
         from ckpt_policy import demo
 
         rows = [
-            SimpleNamespace(policy="framework default", writes=2, io=0.2, overhead=0.0),
-            SimpleNamespace(policy="ckpt-policy, unconfigured", writes=1, io=0.1, overhead=0.03),
+            SimpleNamespace(policy="framework default", writes=2, io=0.2, overhead=0.0, note=""),
+            SimpleNamespace(policy="ckpt-policy, unconfigured", writes=1, io=0.1, overhead=0.03,
+                            note="no plan: the engine did not start"),
         ]
         output = StringIO()
         with patch.object(demo, "engine_path", return_value="/engine"), \
@@ -37,9 +38,11 @@ class TestDemoJson(unittest.TestCase):
 
         result = json.loads(output.getvalue())
         self.assertEqual(len(result), 2)
-        self.assertEqual([set(row) for row in result],
-                         [{"policy", "writes", "io", "overhead"}] * 2)
+        required_fields = {"policy", "writes", "io", "overhead", "note"}
+        self.assertTrue(all(required_fields <= row.keys() for row in result))
         self.assertEqual([row["writes"] for row in result], [2, 1])
+        self.assertEqual([row["note"] for row in result],
+                         ["", "no plan: the engine did not start"])
 
 
 def plan(root, **fields):
