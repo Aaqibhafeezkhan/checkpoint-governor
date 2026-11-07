@@ -84,7 +84,8 @@ def main(argv=None) -> int:
 
     rows = run(steps=args.steps, save_every=args.save_every, write_ms=args.write_ms)
     if args.json:
-        json.dump([{"policy": r.policy, "writes": r.writes, "io": r.io, "overhead": r.overhead}
+        json.dump([{"policy": r.policy, "writes": r.writes, "io": r.io, "overhead": r.overhead,
+                    "note": r.note}
                    for r in rows], sys.stdout, indent=2)
         print()
         return 0
